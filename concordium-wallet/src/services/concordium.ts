@@ -3,12 +3,11 @@ import {
   type CreateAccountCreationRequestMessage,
   type CreateAccountCreationResponse,
   type SignedCredentialDeploymentTransaction,
-  type CCDAccountKeyPair,
   type KeyAccount,
   type SerializedCredentialDeploymentDetails,
 } from '@concordium/id-app-sdk';
 import * as SDK from '@concordium/web-sdk';
-import type { Network, WalletAccount } from '../types';
+import type { Network, WalletAccount, CCDAccountKeyPair } from '../types';
 import { getSession, getSignClient } from './walletConnect';
 
 // Concordium Testnet gRPC endpoint
@@ -32,7 +31,11 @@ export function generateAccountFromSeed(
   network: Network,
   accountIndex: number = 0
 ): CCDAccountKeyPair {
-  return ConcordiumIDAppSDK.generateAccountWithSeedPhrase(seedPhrase, network, accountIndex);
+  const wallet = SDK.ConcordiumHdWallet.fromSeedPhrase(seedPhrase, network);
+  // Identity provider index = 0, identity index = 0 (managed by IDApp)
+  const publicKey = wallet.getAccountPublicKey(0, 0, accountIndex).toString('hex');
+  const signingKey = wallet.getAccountSigningKey(0, 0, accountIndex).toString('hex');
+  return { publicKey, signingKey };
 }
 
 export function createAccountCreationRequest(
@@ -137,15 +140,49 @@ export function parseCCDAmount(ccd: string): bigint {
 }
 
 export async function sendCCD(
-  _fromAccount: WalletAccount,
-  _toAddress: string,
-  _amountMicroCCD: bigint,
-  _network: Network
+  fromAccount: WalletAccount,
+  toAddress: string,
+  amountMicroCCD: bigint,
+  network: Network
 ): Promise<string> {
-  // TODO: Implement CCD transfer using Concordium Web SDK
-  // This requires proper transaction signing and submission
-  // For MVP, focus is on account creation via ID App SDK
-  throw new Error('CCD transfer not yet implemented. Use the Concordium ID App or browser wallet for transfers.');
+  const client = getGrpcClient(network);
+
+  // Get the next nonce for the sender account
+  const senderAddress = SDK.AccountAddress.fromBase58(fromAccount.address);
+  const nonceResponse = await client.getNextAccountNonce(senderAddress);
+
+  // Build the legacy AccountTransaction format (what gRPC client expects)
+  const accountTransaction: SDK.AccountTransaction = {
+    header: {
+      sender: senderAddress,
+      nonce: nonceResponse.nonce,
+      expiry: SDK.TransactionExpiry.futureMinutes(5),
+    },
+    type: SDK.AccountTransactionType.Transfer,
+    payload: {
+      amount: SDK.CcdAmount.fromMicroCcd(amountMicroCCD),
+      toAddress: SDK.AccountAddress.fromBase58(toAddress),
+    },
+  };
+
+  // Create signer from the account's signing key
+  const signer = SDK.buildAccountSigner(fromAccount.signingKey);
+
+  // Sign the transaction
+  const signature = await SDK.signTransaction(accountTransaction, signer);
+
+  // Submit via gRPC
+  const txHash = await client.sendAccountTransaction(accountTransaction, signature);
+
+  return SDK.TransactionHash.toHexString(txHash);
+}
+
+export function estimateTransferCost(): { energy: bigint; cost: bigint } {
+  // Simple transfer costs a fixed 300 energy on Concordium
+  const SIMPLE_TRANSFER_ENERGY = 300n;
+  // Approximate NRG to microCCD conversion (varies by chain parameters)
+  const cost = SIMPLE_TRANSFER_ENERGY * 1000n;
+  return { energy: SIMPLE_TRANSFER_ENERGY, cost };
 }
 
 export async function recoverAccounts(
