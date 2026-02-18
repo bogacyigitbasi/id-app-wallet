@@ -4,3 +4,7 @@ export { ConnectIDApp } from './ConnectIDApp';
 export { CreateAccount } from './CreateAccount';
 export { SendCCD } from './SendCCD';
 export { WalletDashboard } from './WalletDashboard';
+export { TransactionHistory } from './TransactionHistory';
+export { TokenList } from './TokenList';
+export { DAppConnector } from './DAppConnector';
+export { SignRequestModal } from './SignRequestModal';
