@@ -3,9 +3,11 @@ import {
   useContext,
   useReducer,
   useEffect,
+  useRef,
+  useCallback,
   type ReactNode,
 } from 'react';
-import type { WalletState, WalletAccount, Network, StoredWalletData } from '../types';
+import type { WalletState, WalletAccount, Network, StoredWalletData, TokenBalance, Transaction } from '../types';
 import { saveWalletData, loadWalletData, clearWalletData } from '../utils/storage';
 import { encryptData, decryptData } from '../utils/crypto';
 import {
@@ -13,6 +15,8 @@ import {
   getAccountBalance,
   formatCCD,
 } from '../services/concordium';
+import { getTokenBalances } from '../services/tokenService';
+import { getTransactionHistory, type WalletProxyTransaction } from '../services/walletProxy';
 
 type WalletAction =
   | { type: 'INITIALIZE'; payload: { accounts: WalletAccount[]; network: Network; accountIndexCounter: number } }
@@ -23,9 +27,16 @@ type WalletAction =
   | { type: 'SET_NETWORK'; payload: Network }
   | { type: 'SET_LOCKED'; payload: boolean }
   | { type: 'INCREMENT_ACCOUNT_INDEX' }
+  | { type: 'SET_TOKENS'; payload: { address: string; tokens: TokenBalance[] } }
+  | { type: 'SET_TRANSACTIONS'; payload: { address: string; transactions: Transaction[] } }
   | { type: 'RESET' };
 
-const initialState: WalletState = {
+interface ExtendedWalletState extends WalletState {
+  tokenBalances: Record<string, TokenBalance[]>;
+  transactions: Record<string, Transaction[]>;
+}
+
+const initialState: ExtendedWalletState = {
   isInitialized: false,
   isLocked: true,
   accounts: [],
@@ -33,9 +44,11 @@ const initialState: WalletState = {
   network: 'Testnet',
   seedPhrase: undefined,
   accountIndexCounter: 0,
+  tokenBalances: {},
+  transactions: {},
 };
 
-function walletReducer(state: WalletState, action: WalletAction): WalletState {
+function walletReducer(state: ExtendedWalletState, action: WalletAction): ExtendedWalletState {
   switch (action.type) {
     case 'INITIALIZE':
       return {
@@ -75,6 +88,22 @@ function walletReducer(state: WalletState, action: WalletAction): WalletState {
       };
     case 'INCREMENT_ACCOUNT_INDEX':
       return { ...state, accountIndexCounter: state.accountIndexCounter + 1 };
+    case 'SET_TOKENS':
+      return {
+        ...state,
+        tokenBalances: {
+          ...state.tokenBalances,
+          [action.payload.address]: action.payload.tokens,
+        },
+      };
+    case 'SET_TRANSACTIONS':
+      return {
+        ...state,
+        transactions: {
+          ...state.transactions,
+          [action.payload.address]: action.payload.transactions,
+        },
+      };
     case 'RESET':
       return initialState;
     default:
@@ -82,13 +111,32 @@ function walletReducer(state: WalletState, action: WalletAction): WalletState {
   }
 }
 
+function mapProxyTransaction(tx: WalletProxyTransaction): Transaction {
+  return {
+    id: tx.id,
+    hash: tx.transactionHash,
+    blockHash: tx.blockHash,
+    blockTime: tx.blockTime,
+    type: tx.details?.type || tx.type?.type || 'unknown',
+    typeContents: tx.type?.contents || '',
+    cost: tx.cost || '0',
+    result: tx.result?.outcome === 'success' ? 'success' : 'rejected',
+    sender: tx.sender || tx.details?.transferSource,
+    amount: tx.details?.transferAmount || tx.total,
+    destination: tx.details?.transferDestination,
+    details: tx.details as Record<string, unknown>,
+  };
+}
+
 interface WalletContextType {
-  state: WalletState;
+  state: ExtendedWalletState;
   createWallet: (seedPhrase: string, password: string) => Promise<void>;
   unlockWallet: (password: string) => Promise<void>;
   lockWallet: () => void;
   addAccount: (account: WalletAccount) => void;
   refreshBalances: () => Promise<void>;
+  refreshTokens: () => Promise<void>;
+  fetchTransactions: (address?: string) => Promise<void>;
   setActiveAccount: (index: number) => void;
   getNextAccountIndex: () => number;
   incrementAccountIndex: () => void;
@@ -100,18 +148,19 @@ const WalletContext = createContext<WalletContextType | null>(null);
 
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(walletReducer, initialState);
+  // Keep password in memory for the session so we can auto-save
+  const sessionPasswordRef = useRef<string | null>(null);
 
   // Check for existing wallet on mount
   useEffect(() => {
     const stored = loadWalletData();
     if (stored) {
-      // Wallet exists but is locked
       dispatch({
         type: 'INITIALIZE',
         payload: {
           accounts: stored.accounts.map((acc) => ({
             ...acc,
-            signingKey: '', // Will be restored on unlock
+            signingKey: '',
             balance: undefined,
           })),
           network: stored.network,
@@ -122,13 +171,44 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // Auto-persist whenever accounts or accountIndexCounter change
+  const autoPersist = useCallback(async (currentState: ExtendedWalletState) => {
+    if (!sessionPasswordRef.current || !currentState.seedPhrase) return;
+    try {
+      const encryptedSeed = await encryptData(currentState.seedPhrase, sessionPasswordRef.current);
+      const walletData: StoredWalletData = {
+        encryptedSeed,
+        accounts: currentState.accounts.map((acc) => ({
+          address: acc.address,
+          publicKey: acc.publicKey,
+          accountIndex: acc.accountIndex,
+          network: acc.network,
+        })),
+        accountIndexCounter: currentState.accountIndexCounter,
+        network: currentState.network,
+      };
+      saveWalletData(walletData);
+      console.log('[WalletContext] Auto-persisted wallet state');
+    } catch (err) {
+      console.error('[WalletContext] Auto-persist failed:', err);
+    }
+  }, []);
+
+  // Watch for account/index changes and auto-save
+  useEffect(() => {
+    if (state.isInitialized && !state.isLocked && sessionPasswordRef.current) {
+      autoPersist(state);
+    }
+  }, [state.accounts.length, state.accountIndexCounter, state.isLocked]);
+
   const createWallet = async (seedPhrase: string, password: string) => {
-    // Validate the seed phrase by trying to generate a key pair
     generateAccountFromSeed(seedPhrase, state.network, 0);
+
+    // Store password in memory for auto-persist
+    sessionPasswordRef.current = password;
 
     dispatch({ type: 'SET_SEED_PHRASE', payload: seedPhrase });
 
-    // Encrypt and store
     const encryptedSeed = await encryptData(seedPhrase, password);
     const walletData: StoredWalletData = {
       encryptedSeed,
@@ -158,7 +238,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const seedPhrase = await decryptData(stored.encryptedSeed, password);
     dispatch({ type: 'SET_SEED_PHRASE', payload: seedPhrase });
 
-    // Restore accounts with signing keys
     const accounts: WalletAccount[] = stored.accounts.map((acc) => {
       const keyPair = generateAccountFromSeed(seedPhrase, acc.network, acc.accountIndex);
       return {
@@ -175,10 +254,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         accountIndexCounter: stored.accountIndexCounter,
       },
     });
+    // Store password in memory for auto-persist
+    sessionPasswordRef.current = password;
+
     dispatch({ type: 'SET_LOCKED', payload: false });
   };
 
   const lockWallet = () => {
+    sessionPasswordRef.current = null;
     dispatch({ type: 'SET_LOCKED', payload: true });
   };
 
@@ -198,6 +281,36 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         console.error(`Failed to refresh balance for account ${i}:`, error);
       }
+    }
+  };
+
+  const refreshTokens = async () => {
+    for (const account of state.accounts) {
+      try {
+        const tokens = await getTokenBalances(account.address, state.network);
+        dispatch({
+          type: 'SET_TOKENS',
+          payload: { address: account.address, tokens },
+        });
+      } catch (error) {
+        console.error(`Failed to refresh tokens for ${account.address}:`, error);
+      }
+    }
+  };
+
+  const fetchTransactions = async (address?: string) => {
+    const targetAddress = address || state.accounts[state.activeAccountIndex]?.address;
+    if (!targetAddress) return;
+
+    try {
+      const response = await getTransactionHistory(targetAddress, state.network, 50);
+      const transactions = response.transactions.map(mapProxyTransaction);
+      dispatch({
+        type: 'SET_TRANSACTIONS',
+        payload: { address: targetAddress, transactions },
+      });
+    } catch (error) {
+      console.error(`Failed to fetch transactions for ${targetAddress}:`, error);
     }
   };
 
@@ -247,6 +360,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         lockWallet,
         addAccount,
         refreshBalances,
+        refreshTokens,
+        fetchTransactions,
         setActiveAccount,
         getNextAccountIndex,
         incrementAccountIndex,
