@@ -40,3 +40,60 @@ export interface TransactionResult {
   hash: string;
   status: 'pending' | 'confirmed' | 'failed';
 }
+
+// Token types
+export interface TokenBalance {
+  tokenId: string;
+  contractIndex: number;
+  contractSubindex: number;
+  balance: string;
+  metadata?: TokenMetadata;
+}
+
+export interface TokenMetadata {
+  name: string;
+  symbol: string;
+  decimals: number;
+  thumbnail?: string;
+  icon?: string;
+}
+
+// Transaction history
+export interface Transaction {
+  id: number;
+  hash: string;
+  blockHash: string;
+  blockTime: number;
+  type: string;
+  typeContents: string;
+  cost: string;
+  result: 'success' | 'rejected';
+  sender?: string;
+  amount?: string;
+  destination?: string;
+  details: Record<string, unknown>;
+}
+
+export interface AccountBalanceInfo {
+  finalizedBalance: string;
+  currentBalance: string;
+  tokens: TokenBalance[];
+}
+
+// dApp signing
+export interface DAppSession {
+  topic: string;
+  peerName: string;
+  peerIcon?: string;
+  peerUrl?: string;
+  connectedAt: number;
+}
+
+export interface SignRequest {
+  id: number;
+  topic: string;
+  method: string;
+  params: unknown;
+  peerName: string;
+  peerIcon?: string;
+}
