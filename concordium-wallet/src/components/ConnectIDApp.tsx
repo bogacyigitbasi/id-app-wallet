@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import type { SessionTypes } from '@walletconnect/types';
-import { connectToIDApp, restoreSession, onSessionEvent } from '../services/walletConnect';
+import { connectToIDApp, onSessionEvent } from '../services/walletConnect';
 import type { Network } from '../types';
 
 interface ConnectIDAppProps {
@@ -18,6 +18,11 @@ export function ConnectIDApp({ network, onConnected, publicKey }: ConnectIDAppPr
   const [sessionData, setSessionData] = useState<SessionTypes.Struct | null>(null);
   const [events, setEvents] = useState<string[]>([]);
 
+  // Memoize onConnected to prevent infinite loops
+  const handleOnConnected = useCallback(() => {
+    onConnected();
+  }, [onConnected]);
+
   useEffect(() => {
     // Listen for session events
     onSessionEvent((data) => {
@@ -25,41 +30,44 @@ export function ConnectIDApp({ network, onConnected, publicKey }: ConnectIDAppPr
       setEvents(prev => [...prev, JSON.stringify(data, null, 2)]);
     });
 
-    // Check for existing session
-    restoreSession().then((session) => {
-      if (session) {
-        console.log('[ConnectIDApp] Restored session:', session);
-        setSessionData(session);
-        setStatus('connected');
-        onConnected();
-      }
-    });
-  }, [onConnected]);
+    // Don't auto-restore session - let user start fresh
+    // This ensures we always show the QR code flow
+  }, []);
 
   const handleConnect = async () => {
     setIsConnecting(true);
     setError('');
     setStatus('connecting');
     setEvents([]);
+    setSessionData(null);
+    setWcUri(null);
 
     try {
+      console.log('[ConnectIDApp] Starting connection for network:', network);
       const { uri, approval } = await connectToIDApp(network);
+      console.log('[ConnectIDApp] Got URI:', uri);
       setWcUri(uri);
       setStatus('waiting');
-      console.log('[ConnectIDApp] Waiting for approval...');
 
       // Wait for approval
+      console.log('[ConnectIDApp] Waiting for ID App approval...');
       const session = await approval;
-      console.log('[ConnectIDApp] Session approved:', session);
+      console.log('[ConnectIDApp] Session approved:', JSON.stringify(session, null, 2));
       setSessionData(session);
       setStatus('connected');
-      onConnected();
+      // Don't auto-navigate - let user see the response first
     } catch (err) {
       console.error('[ConnectIDApp] Error:', err);
       setError(err instanceof Error ? err.message : 'Failed to connect');
       setStatus('idle');
     } finally {
       setIsConnecting(false);
+    }
+  };
+
+  const handleProceed = () => {
+    if (sessionData) {
+      handleOnConnected();
     }
   };
 
@@ -115,6 +123,9 @@ export function ConnectIDApp({ network, onConnected, publicKey }: ConnectIDAppPr
       {status === 'connected' && (
         <div className="success-message">
           <p>Connected to ID App!</p>
+          <button onClick={handleProceed} className="primary-button" style={{ marginTop: '1rem' }}>
+            Proceed to Create Account
+          </button>
         </div>
       )}
 

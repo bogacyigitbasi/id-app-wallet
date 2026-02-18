@@ -845,4 +845,512 @@ textarea {
   .button-group {
     flex-direction: column;
   }
+
+  .tab-nav {
+    overflow-x: auto;
+  }
+}
+
+/* ==========================================
+   Tab Navigation
+   ========================================== */
+.tab-nav {
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid var(--border-color);
+  margin-bottom: 1.5rem;
+}
+
+.tab-button {
+  flex: 1;
+  padding: 0.75rem 1rem;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  border-radius: 0;
+}
+
+.tab-button:hover {
+  color: var(--primary-color);
+  background: rgba(26, 115, 232, 0.05);
+}
+
+.tab-button.active {
+  color: var(--primary-color);
+  border-bottom-color: var(--primary-color);
+}
+
+.tab-content {
+  min-height: 300px;
+}
+
+/* ==========================================
+   Transaction History
+   ========================================== */
+.transaction-history {
+  padding: 0;
+}
+
+.transaction-history .modal-header {
+  margin-bottom: 1rem;
+}
+
+.tx-filters {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.filter-button {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.8rem;
+  border-radius: 20px;
+  background: var(--secondary-color);
+  color: var(--text-secondary);
+  border: none;
+  cursor: pointer;
+}
+
+.filter-button.active {
+  background: var(--primary-color);
+  color: white;
+}
+
+.tx-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.tx-item {
+  background: white;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 1rem;
+  cursor: pointer;
+  transition: box-shadow 0.2s;
+}
+
+.tx-item:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.tx-summary {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.tx-icon-badge {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+  font-weight: bold;
+}
+
+.tx-icon-badge.sent {
+  background: #fce8e6;
+  color: #c5221f;
+}
+
+.tx-icon-badge.received {
+  background: #e6f4ea;
+  color: #137333;
+}
+
+.tx-icon-badge.rejected {
+  background: #fce8e6;
+  color: #c5221f;
+}
+
+.tx-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.tx-type {
+  font-weight: 500;
+  font-size: 0.9rem;
+}
+
+.tx-date {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.tx-amount {
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+}
+
+.amount-sent {
+  color: #c5221f;
+  font-weight: 500;
+}
+
+.amount-received {
+  color: #137333;
+  font-weight: 500;
+}
+
+.tx-status {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
+
+.tx-status.success {
+  color: #137333;
+}
+
+.tx-status.rejected {
+  color: #c5221f;
+}
+
+.tx-details-expanded {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.tx-details-expanded .detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.3rem 0;
+  gap: 0.5rem;
+}
+
+.tx-details-expanded .label {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  min-width: 50px;
+}
+
+.tx-details-expanded code {
+  font-size: 0.7rem;
+  word-break: break-all;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 3rem 1rem;
+  color: var(--text-secondary);
+}
+
+/* ==========================================
+   Token List
+   ========================================== */
+.token-list {
+  margin-top: 1rem;
+}
+
+.token-list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.token-list-header h3 {
+  margin: 0;
+}
+
+.token-item {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  margin-bottom: 0.5rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.token-item:hover {
+  background: var(--card-background);
+}
+
+.token-item.ccd-token {
+  border-color: var(--primary-color);
+  border-width: 2px;
+}
+
+.token-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--secondary-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 0.75rem;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.token-icon.ccd-icon {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  font-size: 0.7rem;
+}
+
+.token-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.token-icon .hidden {
+  display: none;
+}
+
+.token-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.token-name {
+  font-weight: 500;
+  font-size: 0.9rem;
+}
+
+.token-symbol {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.token-balance {
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+}
+
+.token-amount {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.token-unit {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.empty-tokens {
+  text-align: center;
+  padding: 2rem;
+  color: var(--text-secondary);
+}
+
+/* ==========================================
+   dApp Connector
+   ========================================== */
+.dapp-connector {
+  padding: 0;
+}
+
+.dapp-connector .modal-header {
+  margin-bottom: 1.5rem;
+}
+
+.connected-dapps {
+  margin-bottom: 2rem;
+}
+
+.connected-dapps h3 {
+  margin-bottom: 1rem;
+}
+
+.dapp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.dapp-item {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem;
+  background: white;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+}
+
+.dapp-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--secondary-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+.dapp-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.dapp-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.dapp-name {
+  font-weight: 500;
+}
+
+.dapp-url {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.disconnect-button {
+  background: none;
+  color: var(--danger-color);
+  padding: 0.4rem 0.8rem;
+  font-size: 0.8rem;
+  border: 1px solid var(--danger-color);
+  border-radius: 6px;
+}
+
+.new-pairing {
+  margin-top: 1.5rem;
+}
+
+.new-pairing h3 {
+  margin-bottom: 1rem;
+}
+
+/* ==========================================
+   Sign Request Modal
+   ========================================== */
+.sign-request-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.sign-request-modal {
+  background: white;
+  border-radius: 16px;
+  padding: 2rem;
+  max-width: 480px;
+  width: 100%;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+}
+
+.sign-request-modal h2 {
+  margin-bottom: 1.5rem;
+}
+
+.request-from {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  background: var(--card-background);
+  border-radius: 8px;
+}
+
+.peer-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+}
+
+.peer-name {
+  font-weight: 600;
+}
+
+.request-method {
+  margin-bottom: 1rem;
+}
+
+.request-method label,
+.request-details label,
+.request-account label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.25rem;
+}
+
+.request-details {
+  margin-bottom: 1rem;
+}
+
+.request-details pre {
+  background: var(--card-background);
+  padding: 0.75rem;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  max-height: 150px;
+  overflow: auto;
+  border: 1px solid var(--border-color);
+}
+
+.request-account {
+  margin-bottom: 1.5rem;
+}
+
+/* ==========================================
+   Fullscreen Mode
+   ========================================== */
+.wallet-dashboard.fullscreen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 9999;
+  background: white;
+}
+
+.wallet-dashboard.fullscreen .dashboard-main {
+  max-width: 100%;
+  padding: 2rem 4rem;
+}
+
+/* ==========================================
+   Overview Tab extras
+   ========================================== */
+.overview-tab .token-list {
+  margin-top: 2rem;
+}
+
+.overview-tab .account-details {
+  margin-top: 2rem;
 }

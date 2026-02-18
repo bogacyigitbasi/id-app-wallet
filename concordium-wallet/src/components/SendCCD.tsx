@@ -1,13 +1,16 @@
 import { useState } from 'react';
 import { useWallet } from '../contexts/WalletContext';
 import { sendCCD, parseCCDAmount, getAccountBalance, formatCCD } from '../services/concordium';
+import { sendTokenTransfer, parseTokenAmount, formatTokenAmount } from '../services/tokenService';
+import type { TokenBalance } from '../types';
 
 interface SendCCDProps {
   onClose: () => void;
   onSuccess: () => void;
+  initialToken?: TokenBalance | null;
 }
 
-export function SendCCD({ onClose, onSuccess }: SendCCDProps) {
+export function SendCCD({ onClose, onSuccess, initialToken }: SendCCDProps) {
   const { state } = useWallet();
   const [recipient, setRecipient] = useState('');
   const [amount, setAmount] = useState('');
@@ -15,36 +18,55 @@ export function SendCCD({ onClose, onSuccess }: SendCCDProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [txHash, setTxHash] = useState('');
   const [step, setStep] = useState<'form' | 'confirm' | 'sending' | 'done'>('form');
+  const [selectedToken, setSelectedToken] = useState<TokenBalance | null>(initialToken || null);
 
   const activeAccount = state.accounts[state.activeAccountIndex];
+  const tokens = activeAccount
+    ? state.tokenBalances[activeAccount.address] || []
+    : [];
+
+  const isCCD = !selectedToken;
 
   const validateAddress = (address: string): boolean => {
-    // Basic validation - Concordium addresses are base58 encoded, typically 50 chars
     return /^[1-9A-HJ-NP-Za-km-z]{50,55}$/.test(address);
   };
 
   const handleContinue = async () => {
     setError('');
 
-    // Validate recipient
     if (!validateAddress(recipient)) {
       setError('Invalid recipient address');
       return;
     }
 
-    // Validate amount
     try {
-      const amountMicroCCD = parseCCDAmount(amount);
-      if (amountMicroCCD <= BigInt(0)) {
-        setError('Amount must be greater than 0');
-        return;
-      }
+      if (isCCD) {
+        const amountMicroCCD = parseCCDAmount(amount);
+        if (amountMicroCCD <= BigInt(0)) {
+          setError('Amount must be greater than 0');
+          return;
+        }
 
-      // Check balance
-      const balance = await getAccountBalance(activeAccount.address, state.network);
-      if (amountMicroCCD > balance) {
-        setError(`Insufficient balance. Available: ${formatCCD(balance)} CCD`);
-        return;
+        const balance = await getAccountBalance(activeAccount.address, state.network);
+        if (amountMicroCCD > balance) {
+          setError(`Insufficient balance. Available: ${formatCCD(balance)} CCD`);
+          return;
+        }
+      } else {
+        const rawAmount = parseTokenAmount(amount, selectedToken!.metadata?.decimals || 0);
+        if (BigInt(rawAmount) <= 0n) {
+          setError('Amount must be greater than 0');
+          return;
+        }
+
+        if (BigInt(rawAmount) > BigInt(selectedToken!.balance)) {
+          const available = formatTokenAmount(
+            selectedToken!.balance,
+            selectedToken!.metadata?.decimals || 0
+          );
+          setError(`Insufficient balance. Available: ${available} ${selectedToken!.metadata?.symbol || ''}`);
+          return;
+        }
       }
     } catch {
       setError('Invalid amount');
@@ -60,8 +82,24 @@ export function SendCCD({ onClose, onSuccess }: SendCCDProps) {
     setStep('sending');
 
     try {
-      const amountMicroCCD = parseCCDAmount(amount);
-      const hash = await sendCCD(activeAccount, recipient, amountMicroCCD, state.network);
+      let hash: string;
+
+      if (isCCD) {
+        const amountMicroCCD = parseCCDAmount(amount);
+        hash = await sendCCD(activeAccount, recipient, amountMicroCCD, state.network);
+      } else {
+        const rawAmount = parseTokenAmount(amount, selectedToken!.metadata?.decimals || 0);
+        hash = await sendTokenTransfer(
+          activeAccount,
+          recipient,
+          rawAmount,
+          selectedToken!.tokenId,
+          selectedToken!.contractIndex,
+          selectedToken!.contractSubindex,
+          state.network
+        );
+      }
+
       setTxHash(hash);
       setStep('done');
       onSuccess();
@@ -73,20 +111,58 @@ export function SendCCD({ onClose, onSuccess }: SendCCDProps) {
     }
   };
 
+  const getDisplaySymbol = () => {
+    if (isCCD) return 'CCD';
+    return selectedToken?.metadata?.symbol || 'Token';
+  };
+
   return (
     <div className="send-ccd">
       <div className="modal-header">
-        <h2>Send CCD</h2>
+        <h2>Send {getDisplaySymbol()}</h2>
         <button onClick={onClose} className="close-button">&times;</button>
       </div>
 
       {step === 'form' && (
         <form onSubmit={(e) => { e.preventDefault(); handleContinue(); }}>
           <div className="form-group">
+            <label>Asset</label>
+            <select
+              value={selectedToken ? `${selectedToken.contractIndex}-${selectedToken.tokenId}` : 'ccd'}
+              onChange={(e) => {
+                if (e.target.value === 'ccd') {
+                  setSelectedToken(null);
+                } else {
+                  const token = tokens.find(
+                    (t) => `${t.contractIndex}-${t.tokenId}` === e.target.value
+                  );
+                  setSelectedToken(token || null);
+                }
+                setAmount('');
+              }}
+            >
+              <option value="ccd">CCD - Concordium</option>
+              {tokens.map((token) => (
+                <option
+                  key={`${token.contractIndex}-${token.tokenId}`}
+                  value={`${token.contractIndex}-${token.tokenId}`}
+                >
+                  {token.metadata?.symbol || 'Token'} - {token.metadata?.name || `Contract ${token.contractIndex}`}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="form-group">
             <label>From</label>
             <div className="from-account">
               <code>{activeAccount.address.slice(0, 10)}...{activeAccount.address.slice(-10)}</code>
-              <span className="balance">Balance: {activeAccount.balance || '0'} CCD</span>
+              <span className="balance">
+                Balance: {isCCD
+                  ? `${activeAccount.balance || '0'} CCD`
+                  : `${formatTokenAmount(selectedToken!.balance, selectedToken!.metadata?.decimals || 0)} ${selectedToken!.metadata?.symbol || ''}`
+                }
+              </span>
             </div>
           </div>
 
@@ -103,7 +179,7 @@ export function SendCCD({ onClose, onSuccess }: SendCCDProps) {
           </div>
 
           <div className="form-group">
-            <label htmlFor="amount">Amount (CCD)</label>
+            <label htmlFor="amount">Amount ({getDisplaySymbol()})</label>
             <input
               type="text"
               id="amount"
@@ -133,17 +209,27 @@ export function SendCCD({ onClose, onSuccess }: SendCCDProps) {
 
           <div className="tx-details">
             <div className="detail-row">
+              <span className="label">Asset:</span>
+              <span className="value">{getDisplaySymbol()}</span>
+            </div>
+            <div className="detail-row">
               <span className="label">To:</span>
               <code>{recipient.slice(0, 15)}...{recipient.slice(-15)}</code>
             </div>
             <div className="detail-row">
               <span className="label">Amount:</span>
-              <span className="value">{amount} CCD</span>
+              <span className="value">{amount} {getDisplaySymbol()}</span>
             </div>
             <div className="detail-row">
               <span className="label">Network:</span>
               <span className="value">{state.network}</span>
             </div>
+            {!isCCD && (
+              <div className="detail-row">
+                <span className="label">Note:</span>
+                <span className="value hint">CCD fee will be deducted from your CCD balance</span>
+              </div>
+            )}
           </div>
 
           {error && <div className="error-message">{error}</div>}
@@ -168,7 +254,7 @@ export function SendCCD({ onClose, onSuccess }: SendCCDProps) {
 
       {step === 'done' && (
         <div className="transaction-success">
-          <div className="success-icon">✓</div>
+          <div className="success-icon">&#10003;</div>
           <h3>Transaction Sent!</h3>
 
           <div className="tx-hash">
