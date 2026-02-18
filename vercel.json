@@ -1,0 +1,5 @@
+{
+  "buildCommand": "cd concordium-wallet && npm install && npm run build",
+  "outputDirectory": "concordium-wallet/dist",
+  "framework": "vite"
+}
