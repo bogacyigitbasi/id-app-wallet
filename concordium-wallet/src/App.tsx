@@ -2,9 +2,10 @@ import { useState } from 'react';
 import { WalletProvider, useWallet } from './contexts/WalletContext';
 import { SeedPhraseInput, UnlockWallet, WalletDashboard } from './components';
 import { hasWalletData } from './utils/storage';
+import { generateSeedPhrase } from './services/concordium';
 import './App.css';
 
-type AppView = 'welcome' | 'import' | 'unlock' | 'dashboard';
+type AppView = 'welcome' | 'create' | 'import' | 'unlock' | 'dashboard';
 
 function WalletApp() {
   const { state, createWallet, unlockWallet, resetWallet, lockWallet } = useWallet();
@@ -16,6 +17,7 @@ function WalletApp() {
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [generatedSeed, setGeneratedSeed] = useState('');
 
   const handleImportWallet = async (seedPhrase: string, password: string) => {
     setIsLoading(true);
@@ -84,19 +86,37 @@ function WalletApp() {
           </div>
 
           <div className="welcome-actions">
-            <button onClick={() => setView('import')} className="primary-button">
-              Import Wallet
+            <button onClick={() => {
+              setGeneratedSeed(generateSeedPhrase());
+              setView('create');
+            }} className="primary-button">
+              Create New Wallet
+            </button>
+            <button onClick={() => setView('import')} className="secondary-button">
+              Restore Existing Wallet
             </button>
           </div>
 
           <div className="welcome-note">
             <p>
-              <strong>Note:</strong> This wallet requires a seed phrase to derive keys.
-              Your seed phrase is encrypted and stored locally.
+              <strong>Note:</strong> Your seed phrase is encrypted and stored locally.
+              Never share it with anyone.
             </p>
           </div>
         </div>
       </div>
+    );
+  }
+
+  if (view === 'create') {
+    return (
+      <CreateWalletFlow
+        seedPhrase={generatedSeed}
+        onSubmit={handleImportWallet}
+        onBack={() => setView('welcome')}
+        isLoading={isLoading}
+        error={error}
+      />
     );
   }
 
@@ -106,8 +126,8 @@ function WalletApp() {
         <button onClick={() => setView('welcome')} className="back-button">
           ← Back
         </button>
-        <h1>Import Wallet</h1>
-        <p>Enter your existing seed phrase to import your wallet.</p>
+        <h1>Restore Wallet</h1>
+        <p>Enter your existing seed phrase to restore your wallet.</p>
 
         {error && <div className="error-message">{error}</div>}
 
@@ -121,6 +141,128 @@ function WalletApp() {
   }
 
   return null;
+}
+
+interface CreateWalletFlowProps {
+  seedPhrase: string;
+  onSubmit: (seedPhrase: string, password: string) => void;
+  onBack: () => void;
+  isLoading: boolean;
+  error: string;
+}
+
+function CreateWalletFlow({ seedPhrase, onSubmit, onBack, isLoading, error }: CreateWalletFlowProps) {
+  const [step, setStep] = useState<'backup' | 'password'>('backup');
+  const [backedUp, setBackedUp] = useState(false);
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [formError, setFormError] = useState('');
+  const words = seedPhrase.split(' ');
+
+  const copyToClipboard = () => {
+    navigator.clipboard.writeText(seedPhrase);
+  };
+
+  const handleSetPassword = (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError('');
+
+    if (password.length < 8) {
+      setFormError('Password must be at least 8 characters');
+      return;
+    }
+    if (password !== confirmPassword) {
+      setFormError('Passwords do not match');
+      return;
+    }
+
+    onSubmit(seedPhrase, password);
+  };
+
+  if (step === 'backup') {
+    return (
+      <div className="create-wallet-screen">
+        <button onClick={onBack} className="back-button">← Back</button>
+        <h1>Back Up Your Seed Phrase</h1>
+        <p className="warning-text">
+          Write down these 24 words in order and store them somewhere safe.
+          This is the only way to recover your wallet.
+        </p>
+
+        <div className="seed-phrase-grid">
+          {words.map((word, idx) => (
+            <div key={idx} className="seed-word">
+              <span className="seed-word-number">{idx + 1}</span>
+              <span className="seed-word-text">{word}</span>
+            </div>
+          ))}
+        </div>
+
+        <button onClick={copyToClipboard} className="secondary-button" style={{ marginTop: '1rem' }}>
+          Copy to Clipboard
+        </button>
+
+        <label className="backup-checkbox">
+          <input
+            type="checkbox"
+            checked={backedUp}
+            onChange={(e) => setBackedUp(e.target.checked)}
+          />
+          I have written down my seed phrase and stored it safely
+        </label>
+
+        <button
+          onClick={() => setStep('password')}
+          disabled={!backedUp}
+          className="primary-button"
+        >
+          Continue
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="create-wallet-screen">
+      <button onClick={() => setStep('backup')} className="back-button">← Back</button>
+      <h1>Set a Password</h1>
+      <p>This password encrypts your seed phrase locally.</p>
+
+      <form onSubmit={handleSetPassword} className="seed-phrase-form">
+        <div className="form-group">
+          <label htmlFor="create-password">Password</label>
+          <input
+            type="password"
+            id="create-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="At least 8 characters"
+            disabled={isLoading}
+            autoComplete="new-password"
+          />
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="create-confirm-password">Confirm Password</label>
+          <input
+            type="password"
+            id="create-confirm-password"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            placeholder="Confirm your password"
+            disabled={isLoading}
+            autoComplete="new-password"
+          />
+        </div>
+
+        {(formError || error) && <div className="error-message">{formError || error}</div>}
+
+        <button type="submit" disabled={isLoading} className="primary-button">
+          {isLoading ? 'Creating Wallet...' : 'Create Wallet'}
+        </button>
+      </form>
+    </div>
+  );
 }
 
 function App() {

@@ -72,6 +72,14 @@ export interface Transaction {
   amount?: string;
   destination?: string;
   details: Record<string, unknown>;
+  tokenTransfer?: {
+    tokenId: string;
+    amount: string;
+    from: string;
+    to: string;
+    contractIndex: number;
+    contractSubindex: number;
+  };
 }
 
 export interface AccountBalanceInfo {

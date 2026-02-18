@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useWallet } from '../contexts/WalletContext';
 import { formatCCD } from '../services/concordium';
+import { formatTokenAmount } from '../services/tokenService';
+import type { Transaction } from '../types';
 
 interface TransactionHistoryProps {
   onClose: () => void;
@@ -36,8 +38,8 @@ export function TransactionHistory({ onClose }: TransactionHistoryProps) {
 
   const filteredTransactions = transactions.filter((tx) => {
     if (filter === 'all') return true;
-    if (filter === 'sent') return tx.sender === activeAccount?.address;
-    if (filter === 'received') return tx.destination === activeAccount?.address;
+    if (filter === 'sent') return isSent(tx);
+    if (filter === 'received') return !isSent(tx);
     if (filter === 'contract') return tx.type === 'update' || tx.type === 'initContract';
     return true;
   });
@@ -53,8 +55,12 @@ export function TransactionHistory({ onClose }: TransactionHistoryProps) {
     });
   };
 
-  const getTypeLabel = (type: string) => {
-    switch (type) {
+  const getTypeLabel = (tx: Transaction) => {
+    // If it's a token transfer, label it as such
+    if (tx.tokenTransfer) {
+      return 'Token Transfer';
+    }
+    switch (tx.type) {
       case 'transfer': return 'Transfer';
       case 'transferWithMemo': return 'Transfer';
       case 'update': return 'Contract Update';
@@ -63,11 +69,19 @@ export function TransactionHistory({ onClose }: TransactionHistoryProps) {
       case 'credentialDeployment': return 'Account Creation';
       case 'configureBaker': return 'Validator Config';
       case 'configureDelegation': return 'Delegation Config';
-      default: return type;
+      default: return tx.type;
     }
   };
 
-  const isSent = (tx: typeof transactions[0]) => tx.sender === activeAccount?.address;
+  const isSent = (tx: Transaction) => {
+    // For token transfers, check the CIS-2 event from/to
+    if (tx.tokenTransfer) {
+      return tx.tokenTransfer.from === activeAccount?.address;
+    }
+    return tx.sender === activeAccount?.address;
+  };
+
+  const isTokenTx = (tx: Transaction) => !!tx.tokenTransfer;
 
   const formatAmount = (amount?: string) => {
     if (!amount) return '';
@@ -77,6 +91,22 @@ export function TransactionHistory({ onClose }: TransactionHistoryProps) {
     } catch {
       return amount;
     }
+  };
+
+  const getTokenDisplayAmount = (tx: Transaction): string => {
+    if (!tx.tokenTransfer) return '';
+    const tt = tx.tokenTransfer;
+    // Find metadata from token balances if available
+    const tokens = activeAccount
+      ? state.tokenBalances[activeAccount.address] || []
+      : [];
+    const match = tokens.find(
+      (t) => t.contractIndex === tt.contractIndex && t.tokenId === tt.tokenId
+    );
+    const decimals = match?.metadata?.decimals || 0;
+    const symbol = match?.metadata?.symbol || 'Token';
+    const formatted = formatTokenAmount(tt.amount, decimals);
+    return `${formatted} ${symbol}`;
   };
 
   return (
@@ -116,77 +146,98 @@ export function TransactionHistory({ onClose }: TransactionHistoryProps) {
         </div>
       ) : (
         <div className="tx-list">
-          {filteredTransactions.map((tx) => (
-            <div
-              key={tx.hash}
-              className={`tx-item ${expandedTx === tx.hash ? 'expanded' : ''}`}
-              onClick={() => setExpandedTx(expandedTx === tx.hash ? null : tx.hash)}
-            >
-              <div className="tx-summary">
-                <div className="tx-icon">
-                  {tx.result === 'rejected' ? (
-                    <span className="tx-icon-badge rejected">!</span>
-                  ) : isSent(tx) ? (
-                    <span className="tx-icon-badge sent">&uarr;</span>
-                  ) : (
-                    <span className="tx-icon-badge received">&darr;</span>
-                  )}
-                </div>
-                <div className="tx-info">
-                  <span className="tx-type">{getTypeLabel(tx.type)}</span>
-                  <span className="tx-date">{formatDate(tx.blockTime)}</span>
-                </div>
-                <div className="tx-amount">
-                  {tx.amount && (
-                    <span className={isSent(tx) ? 'amount-sent' : 'amount-received'}>
-                      {isSent(tx) ? '-' : '+'}{formatAmount(tx.amount)} CCD
-                    </span>
-                  )}
-                  <span className={`tx-status ${tx.result}`}>
-                    {tx.result === 'success' ? 'Success' : 'Failed'}
-                  </span>
-                </div>
-              </div>
+          {filteredTransactions.map((tx) => {
+            const sent = isSent(tx);
+            const tokenTx = isTokenTx(tx);
 
-              {expandedTx === tx.hash && (
-                <div className="tx-details-expanded">
-                  <div className="detail-row">
-                    <span className="label">Hash:</span>
-                    <code>{tx.hash}</code>
+            return (
+              <div
+                key={tx.hash}
+                className={`tx-item ${expandedTx === tx.hash ? 'expanded' : ''}`}
+                onClick={() => setExpandedTx(expandedTx === tx.hash ? null : tx.hash)}
+              >
+                <div className="tx-summary">
+                  <div className="tx-icon">
+                    {tx.result === 'rejected' ? (
+                      <span className="tx-icon-badge rejected">!</span>
+                    ) : sent ? (
+                      <span className="tx-icon-badge sent">&uarr;</span>
+                    ) : (
+                      <span className="tx-icon-badge received">&darr;</span>
+                    )}
                   </div>
-                  {tx.sender && (
-                    <div className="detail-row">
-                      <span className="label">From:</span>
-                      <code>{tx.sender}</code>
-                    </div>
-                  )}
-                  {tx.destination && (
-                    <div className="detail-row">
-                      <span className="label">To:</span>
-                      <code>{tx.destination}</code>
-                    </div>
-                  )}
-                  <div className="detail-row">
-                    <span className="label">Cost:</span>
-                    <span>{formatAmount(tx.cost)} CCD</span>
+                  <div className="tx-info">
+                    <span className="tx-type">{getTypeLabel(tx)}</span>
+                    <span className="tx-date">{formatDate(tx.blockTime)}</span>
                   </div>
-                  <div className="detail-row">
-                    <span className="label">Block:</span>
-                    <code>{tx.blockHash.slice(0, 16)}...</code>
+                  <div className="tx-amount">
+                    {tokenTx ? (
+                      <span className={sent ? 'amount-sent' : 'amount-received'}>
+                        {sent ? '-' : '+'}{getTokenDisplayAmount(tx)}
+                      </span>
+                    ) : tx.amount ? (
+                      <span className={sent ? 'amount-sent' : 'amount-received'}>
+                        {sent ? '-' : '+'}{formatAmount(tx.amount)} CCD
+                      </span>
+                    ) : null}
+                    <span className={`tx-status ${tx.result}`}>
+                      {tx.result === 'success' ? 'Success' : 'Failed'}
+                    </span>
                   </div>
-                  <a
-                    href={`https://testnet.ccdscan.io/transactions/${tx.hash}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="explorer-link"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    View on Explorer
-                  </a>
                 </div>
-              )}
-            </div>
-          ))}
+
+                {expandedTx === tx.hash && (
+                  <div className="tx-details-expanded">
+                    <div className="detail-row">
+                      <span className="label">Hash:</span>
+                      <code>{tx.hash}</code>
+                    </div>
+                    {tx.sender && (
+                      <div className="detail-row">
+                        <span className="label">From:</span>
+                        <code>{tx.sender}</code>
+                      </div>
+                    )}
+                    {tx.destination && (
+                      <div className="detail-row">
+                        <span className="label">To:</span>
+                        <code>{tx.destination}</code>
+                      </div>
+                    )}
+                    {tx.tokenTransfer && (
+                      <>
+                        <div className="detail-row">
+                          <span className="label">Token:</span>
+                          <span>{getTokenDisplayAmount(tx)}</span>
+                        </div>
+                        <div className="detail-row">
+                          <span className="label">Contract:</span>
+                          <code>{tx.tokenTransfer.contractIndex},{tx.tokenTransfer.contractSubindex}</code>
+                        </div>
+                      </>
+                    )}
+                    <div className="detail-row">
+                      <span className="label">Cost:</span>
+                      <span>{formatAmount(tx.cost)} CCD</span>
+                    </div>
+                    <div className="detail-row">
+                      <span className="label">Block:</span>
+                      <code>{tx.blockHash.slice(0, 16)}...</code>
+                    </div>
+                    <a
+                      href={`https://testnet.ccdscan.io/?dcount=2&dentity=transaction&dhash=${tx.hash}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="explorer-link"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      View on Explorer
+                    </a>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

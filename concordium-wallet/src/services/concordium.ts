@@ -7,6 +7,8 @@ import {
   type SerializedCredentialDeploymentDetails,
 } from '@concordium/id-app-sdk';
 import * as SDK from '@concordium/web-sdk';
+import { generateMnemonic } from '@scure/bip39';
+import { wordlist } from '@scure/bip39/wordlists/english';
 import type { Network, WalletAccount, CCDAccountKeyPair } from '../types';
 import { getSession, getSignClient } from './walletConnect';
 
@@ -24,6 +26,13 @@ export function getGrpcClient(network: Network): SDK.ConcordiumGRPCWebClient {
 
   grpcClient = new SDK.ConcordiumGRPCWebClient(url, port);
   return grpcClient;
+}
+
+/**
+ * Generate a new BIP39 24-word seed phrase using CSPRNG.
+ */
+export function generateSeedPhrase(): string {
+  return generateMnemonic(wordlist, 256);
 }
 
 export function generateAccountFromSeed(

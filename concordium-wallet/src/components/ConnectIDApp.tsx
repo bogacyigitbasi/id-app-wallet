@@ -73,6 +73,9 @@ export function ConnectIDApp({ network, onConnected, publicKey }: ConnectIDAppPr
 
   const deepLink = wcUri ? `concordium://wc?uri=${encodeURIComponent(wcUri)}` : '';
 
+  // Derive the auth code from the WC URI topic (first 4 chars, uppercased)
+  const authCode = wcUri ? wcUri.replace('wc:', '').split('@')[0].substring(0, 4).toUpperCase() : '';
+
   return (
     <div className="connect-idapp">
       <h2>Connect to Concordium ID App</h2>
@@ -105,6 +108,11 @@ export function ConnectIDApp({ network, onConnected, publicKey }: ConnectIDAppPr
       {status === 'waiting' && wcUri && (
         <div className="qr-section">
           <p>Scan this QR code with the Concordium ID App, or click the button below if on mobile:</p>
+
+          <div className="auth-code-display">
+            <p>Match this code in the ID App</p>
+            <div className="auth-code">{authCode}</div>
+          </div>
 
           <div className="qr-code">
             <QRCodeSVG value={wcUri} size={256} />

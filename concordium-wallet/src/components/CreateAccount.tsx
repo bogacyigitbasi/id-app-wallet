@@ -140,7 +140,7 @@ export function CreateAccount({ onAccountCreated, onCancel }: CreateAccountProps
           <label>Transaction Hash</label>
           <code>{txHash}</code>
           <a
-            href={`https://testnet.ccdscan.io/transactions/${txHash}`}
+            href={`https://testnet.ccdscan.io/?dcount=2&dentity=transaction&dhash=${txHash}`}
             target="_blank"
             rel="noopener noreferrer"
           >

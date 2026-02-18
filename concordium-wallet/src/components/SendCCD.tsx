@@ -116,118 +116,120 @@ export function SendCCD({ onClose, onSuccess, initialToken }: SendCCDProps) {
     return selectedToken?.metadata?.symbol || 'Token';
   };
 
+  const getSelectedBalance = () => {
+    if (isCCD) return `${activeAccount.balance || '0'} CCD`;
+    return `${formatTokenAmount(selectedToken!.balance, selectedToken!.metadata?.decimals || 0)} ${selectedToken!.metadata?.symbol || ''}`;
+  };
+
   return (
-    <div className="send-ccd">
-      <div className="modal-header">
+    <div className="send-view">
+      <div className="send-view-header">
+        <button onClick={onClose} className="back-link">&larr; Back</button>
         <h2>Send {getDisplaySymbol()}</h2>
-        <button onClick={onClose} className="close-button">&times;</button>
       </div>
 
       {step === 'form' && (
-        <form onSubmit={(e) => { e.preventDefault(); handleContinue(); }}>
-          <div className="form-group">
-            <label>Asset</label>
-            <select
-              value={selectedToken ? `${selectedToken.contractIndex}-${selectedToken.tokenId}` : 'ccd'}
-              onChange={(e) => {
-                if (e.target.value === 'ccd') {
-                  setSelectedToken(null);
-                } else {
-                  const token = tokens.find(
-                    (t) => `${t.contractIndex}-${t.tokenId}` === e.target.value
-                  );
-                  setSelectedToken(token || null);
-                }
-                setAmount('');
-              }}
-            >
-              <option value="ccd">CCD - Concordium</option>
-              {tokens.map((token) => (
-                <option
-                  key={`${token.contractIndex}-${token.tokenId}`}
-                  value={`${token.contractIndex}-${token.tokenId}`}
-                >
-                  {token.metadata?.symbol || 'Token'} - {token.metadata?.name || `Contract ${token.contractIndex}`}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="form-group">
-            <label>From</label>
-            <div className="from-account">
-              <code>{activeAccount.address.slice(0, 10)}...{activeAccount.address.slice(-10)}</code>
-              <span className="balance">
-                Balance: {isCCD
-                  ? `${activeAccount.balance || '0'} CCD`
-                  : `${formatTokenAmount(selectedToken!.balance, selectedToken!.metadata?.decimals || 0)} ${selectedToken!.metadata?.symbol || ''}`
-                }
-              </span>
+        <div className="send-card">
+          <form onSubmit={(e) => { e.preventDefault(); handleContinue(); }}>
+            <div className="form-group">
+              <label>Asset</label>
+              <select
+                value={selectedToken ? `${selectedToken.contractIndex}-${selectedToken.tokenId}` : 'ccd'}
+                onChange={(e) => {
+                  if (e.target.value === 'ccd') {
+                    setSelectedToken(null);
+                  } else {
+                    const token = tokens.find(
+                      (t) => `${t.contractIndex}-${t.tokenId}` === e.target.value
+                    );
+                    setSelectedToken(token || null);
+                  }
+                  setAmount('');
+                }}
+              >
+                <option value="ccd">CCD - Concordium</option>
+                {tokens.map((token) => (
+                  <option
+                    key={`${token.contractIndex}-${token.tokenId}`}
+                    value={`${token.contractIndex}-${token.tokenId}`}
+                  >
+                    {token.metadata?.symbol || 'Token'} - {token.metadata?.name || `Contract ${token.contractIndex}`}
+                  </option>
+                ))}
+              </select>
             </div>
-          </div>
 
-          <div className="form-group">
-            <label htmlFor="recipient">Recipient Address</label>
-            <input
-              type="text"
-              id="recipient"
-              value={recipient}
-              onChange={(e) => setRecipient(e.target.value)}
-              placeholder="Enter Concordium address"
-              autoComplete="off"
-            />
-          </div>
+            <div className="form-group">
+              <label>From</label>
+              <div className="send-from-account">
+                <code>{activeAccount.address.slice(0, 10)}...{activeAccount.address.slice(-10)}</code>
+                <span className="send-from-balance">{getSelectedBalance()}</span>
+              </div>
+            </div>
 
-          <div className="form-group">
-            <label htmlFor="amount">Amount ({getDisplaySymbol()})</label>
-            <input
-              type="text"
-              id="amount"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              placeholder="0.00"
-              inputMode="decimal"
-            />
-          </div>
+            <div className="form-group">
+              <label htmlFor="recipient">Recipient Address</label>
+              <input
+                type="text"
+                id="recipient"
+                value={recipient}
+                onChange={(e) => setRecipient(e.target.value)}
+                placeholder="Enter Concordium address"
+                autoComplete="off"
+              />
+            </div>
 
-          {error && <div className="error-message">{error}</div>}
+            <div className="form-group">
+              <label htmlFor="amount">Amount ({getDisplaySymbol()})</label>
+              <input
+                type="text"
+                id="amount"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                placeholder="0.00"
+                inputMode="decimal"
+              />
+            </div>
 
-          <div className="button-group">
-            <button type="button" onClick={onClose} className="secondary-button">
-              Cancel
-            </button>
-            <button type="submit" className="primary-button">
-              Continue
-            </button>
-          </div>
-        </form>
+            {error && <div className="error-message">{error}</div>}
+
+            <div className="button-group">
+              <button type="button" onClick={onClose} className="secondary-button">
+                Cancel
+              </button>
+              <button type="submit" className="primary-button">
+                Continue
+              </button>
+            </div>
+          </form>
+        </div>
       )}
 
       {step === 'confirm' && (
-        <div className="confirm-transaction">
+        <div className="send-card">
           <h3>Confirm Transaction</h3>
 
-          <div className="tx-details">
+          <div className="send-confirm-details">
             <div className="detail-row">
-              <span className="label">Asset:</span>
+              <span className="label">Asset</span>
               <span className="value">{getDisplaySymbol()}</span>
             </div>
             <div className="detail-row">
-              <span className="label">To:</span>
+              <span className="label">To</span>
               <code>{recipient.slice(0, 15)}...{recipient.slice(-15)}</code>
             </div>
             <div className="detail-row">
-              <span className="label">Amount:</span>
+              <span className="label">Amount</span>
               <span className="value">{amount} {getDisplaySymbol()}</span>
             </div>
             <div className="detail-row">
-              <span className="label">Network:</span>
+              <span className="label">Network</span>
               <span className="value">{state.network}</span>
             </div>
             {!isCCD && (
               <div className="detail-row">
-                <span className="label">Note:</span>
-                <span className="value hint">CCD fee will be deducted from your CCD balance</span>
+                <span className="label">Note</span>
+                <span className="value hint">CCD fee deducted from CCD balance</span>
               </div>
             )}
           </div>
@@ -246,24 +248,24 @@ export function SendCCD({ onClose, onSuccess, initialToken }: SendCCDProps) {
       )}
 
       {step === 'sending' && (
-        <div className="sending-status">
+        <div className="send-card send-status-card">
           <div className="spinner" />
           <p>Sending transaction...</p>
         </div>
       )}
 
       {step === 'done' && (
-        <div className="transaction-success">
+        <div className="send-card send-status-card">
           <div className="success-icon">&#10003;</div>
           <h3>Transaction Sent!</h3>
 
-          <div className="tx-hash">
+          <div className="send-tx-hash">
             <label>Transaction Hash</label>
             <code>{txHash}</code>
           </div>
 
           <a
-            href={`https://testnet.ccdscan.io/transactions/${txHash}`}
+            href={`https://testnet.ccdscan.io/?dcount=2&dentity=transaction&dhash=${txHash}`}
             target="_blank"
             rel="noopener noreferrer"
             className="explorer-link"
@@ -271,7 +273,7 @@ export function SendCCD({ onClose, onSuccess, initialToken }: SendCCDProps) {
             View on Explorer
           </a>
 
-          <button onClick={onClose} className="primary-button">
+          <button onClick={onClose} className="primary-button" style={{ width: '100%' }}>
             Done
           </button>
         </div>

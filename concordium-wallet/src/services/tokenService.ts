@@ -1,50 +1,474 @@
 import * as SDK from '@concordium/web-sdk';
-import type { Network, WalletAccount, TokenBalance, TokenMetadata } from '../types';
-import {
-  getProxyAccountBalance,
-  type WalletProxyTokenBalance,
-} from './walletProxy';
+import type { Network, WalletAccount, TokenBalance, TokenMetadata, Transaction } from '../types';
+import { getCIS2Tokens, getProxyAccountBalance, getPLTTokens, type CIS2TokenInfo } from './walletProxy';
 import { getGrpcClient } from './concordium';
 
+// Cache contract names to avoid repeated getInstanceInfo calls
+const contractNameCache = new Map<string, string>();
+
+// ==========================================
+// Token Balance Fetching (via gRPC invokeContract)
+// ==========================================
+
 /**
- * Fetch token balances for an account from wallet-proxy v2 balance endpoint.
+ * Discover token contracts from multiple sources and fetch CIS-2 balances via gRPC.
+ *
+ * Sources:
+ * 1. wallet-proxy v2 accBalance (may include token balances directly)
+ * 2. wallet-proxy PLT tokens endpoint (known PLT contracts)
+ * 3. Transaction history CIS-2 events (discovered contracts)
  */
 export async function getTokenBalances(
   address: string,
-  network: Network
+  network: Network,
+  transactions?: Transaction[]
 ): Promise<TokenBalance[]> {
-  const balance = await getProxyAccountBalance(address, network);
+  const contracts = new Map<string, ContractInfo>();
 
-  if (!balance.tokens || balance.tokens.length === 0) {
-    return [];
+  // Source 1: wallet-proxy v2 accBalance tokens
+  try {
+    const proxyBalance = await getProxyAccountBalance(address, network);
+    if (proxyBalance.tokens && Array.isArray(proxyBalance.tokens)) {
+      for (const pt of proxyBalance.tokens) {
+        const idx = parseInt(pt.contractIndex, 10);
+        const sub = parseInt(pt.contractSubindex, 10);
+        if (isNaN(idx)) continue;
+        const key = `${idx}-${sub}`;
+        if (!contracts.has(key)) {
+          contracts.set(key, { index: idx, subindex: sub, tokenIds: [pt.tokenId], proxyMetadata: pt.metadata });
+        } else {
+          const existing = contracts.get(key)!;
+          if (!existing.tokenIds.includes(pt.tokenId)) {
+            existing.tokenIds.push(pt.tokenId);
+          }
+          if (!existing.proxyMetadata && pt.metadata) {
+            existing.proxyMetadata = pt.metadata;
+          }
+        }
+      }
+    }
+  } catch {
+    // wallet-proxy balance endpoint may not return tokens
   }
 
-  return balance.tokens.map(mapProxyTokenToBalance);
+  // Source 2: PLT tokens endpoint (known contracts on the network)
+  try {
+    const pltTokens = await getPLTTokens(network);
+    for (const plt of pltTokens) {
+      const key = `${plt.contractIndex}-${plt.contractSubindex}`;
+      if (!contracts.has(key)) {
+        contracts.set(key, {
+          index: plt.contractIndex,
+          subindex: plt.contractSubindex,
+          tokenIds: [plt.tokenId],
+          proxyMetadata: plt.metadata,
+        });
+      } else {
+        const existing = contracts.get(key)!;
+        if (!existing.tokenIds.includes(plt.tokenId)) {
+          existing.tokenIds.push(plt.tokenId);
+        }
+        if (!existing.proxyMetadata && plt.metadata) {
+          existing.proxyMetadata = plt.metadata;
+        }
+      }
+    }
+  } catch {
+    // PLT endpoint may not exist
+  }
+
+  // Source 3: Transaction history CIS-2 events
+  const txContracts = discoverTokenContracts(transactions || []);
+  for (const [key, info] of txContracts) {
+    if (!contracts.has(key)) {
+      contracts.set(key, info);
+    } else {
+      const existing = contracts.get(key)!;
+      for (const tid of info.tokenIds) {
+        if (!existing.tokenIds.includes(tid)) {
+          existing.tokenIds.push(tid);
+        }
+      }
+    }
+  }
+
+  // Also scan transaction events for contract updates (even without parsed tokenTransfer)
+  for (const tx of (transactions || [])) {
+    if (tx.type === 'update' && tx.details?.events) {
+      const events = tx.details.events as unknown[];
+      for (const event of events) {
+        if (!event || typeof event !== 'object') continue;
+        const obj = event as Record<string, unknown>;
+        let updated: Record<string, unknown> | undefined;
+        if (obj.Updated && typeof obj.Updated === 'object') {
+          updated = obj.Updated as Record<string, unknown>;
+        } else if (obj.tag === 'Updated') {
+          updated = obj;
+        }
+        if (!updated) continue;
+        const addr = updated.address as { index: number; subindex: number } | undefined;
+        if (addr) {
+          const key = `${addr.index}-${addr.subindex}`;
+          if (!contracts.has(key)) {
+            contracts.set(key, { index: addr.index, subindex: addr.subindex, tokenIds: [''] });
+          }
+        }
+      }
+    }
+  }
+
+  if (contracts.size === 0) return [];
+
+  const client = getGrpcClient(network);
+  const accountAddr = SDK.AccountAddress.fromBase58(address);
+  const tokens: TokenBalance[] = [];
+
+  for (const [key, info] of contracts) {
+    try {
+      const contractName = await getContractName(client, info.index, info.subindex);
+      if (!contractName) continue;
+
+      // Try to get token metadata from wallet-proxy CIS2Tokens endpoint
+      let tokenInfos: CIS2TokenInfo[] = [];
+      try {
+        tokenInfos = await getCIS2Tokens(info.index, info.subindex, network);
+      } catch {
+        // Wallet-proxy might not know this contract
+      }
+
+      // Merge event/PLT-discovered token IDs with wallet-proxy data
+      const knownTokenIds = new Set(tokenInfos.map((t) => t.tokenId));
+      for (const tid of info.tokenIds) {
+        if (!knownTokenIds.has(tid)) {
+          // Use proxy metadata from PLT/accBalance if available
+          const metaFromProxy = info.proxyMetadata;
+          tokenInfos.push({
+            tokenId: tid,
+            metadata: metaFromProxy ? {
+              name: metaFromProxy.name,
+              symbol: metaFromProxy.symbol,
+              decimals: metaFromProxy.decimals,
+              thumbnail: metaFromProxy.thumbnail,
+              display: metaFromProxy.display,
+            } : undefined,
+          });
+        }
+      }
+
+      if (tokenInfos.length === 0) {
+        tokenInfos = [{ tokenId: '' }]; // default token ID for single-token contracts
+      }
+
+      for (const tInfo of tokenInfos) {
+        try {
+          const balance = await queryCIS2BalanceOf(
+            client,
+            contractName,
+            info.index,
+            info.subindex,
+            tInfo.tokenId,
+            accountAddr
+          );
+
+          if (balance && BigInt(balance) > 0n) {
+            const metadata: TokenMetadata = tInfo.metadata
+              ? {
+                  name: tInfo.metadata.name || 'Unknown Token',
+                  symbol: tInfo.metadata.symbol || '???',
+                  decimals: tInfo.metadata.decimals || 0,
+                  thumbnail: tInfo.metadata.thumbnail?.url,
+                  icon: tInfo.metadata.display?.url,
+                }
+              : {
+                  name: `Token ${tInfo.tokenId || '0'}`,
+                  symbol: '???',
+                  decimals: 0,
+                };
+
+            tokens.push({
+              tokenId: tInfo.tokenId,
+              contractIndex: info.index,
+              contractSubindex: info.subindex,
+              balance,
+              metadata,
+            });
+          }
+        } catch (err) {
+          console.error(`[TokenService] Failed to query balance for ${key}/${tInfo.tokenId}:`, err);
+        }
+      }
+    } catch (err) {
+      console.error(`[TokenService] Failed to process contract ${key}:`, err);
+    }
+  }
+
+  return tokens;
 }
 
-function mapProxyTokenToBalance(token: WalletProxyTokenBalance): TokenBalance {
-  const metadata: TokenMetadata | undefined = token.metadata
-    ? {
-        name: token.metadata.name || 'Unknown Token',
-        symbol: token.metadata.symbol || '???',
-        decimals: token.metadata.decimals || 0,
-        thumbnail: token.metadata.thumbnail?.url,
-        icon: token.metadata.display?.url,
-      }
-    : undefined;
-
-  return {
-    tokenId: token.tokenId,
-    contractIndex: parseInt(token.contractIndex, 10),
-    contractSubindex: parseInt(token.contractSubindex, 10),
-    balance: token.balance,
-    metadata,
+interface ContractInfo {
+  index: number;
+  subindex: number;
+  tokenIds: string[];
+  proxyMetadata?: {
+    name?: string;
+    symbol?: string;
+    decimals?: number;
+    thumbnail?: { url?: string };
+    display?: { url?: string };
   };
 }
 
 /**
- * Format a token amount with proper decimals.
+ * Extract unique contract addresses and token IDs from parsed transaction data.
  */
+function discoverTokenContracts(transactions: Transaction[]): Map<string, ContractInfo> {
+  const contracts = new Map<string, ContractInfo>();
+
+  for (const tx of transactions) {
+    if (tx.tokenTransfer) {
+      const key = `${tx.tokenTransfer.contractIndex}-${tx.tokenTransfer.contractSubindex}`;
+      const existing = contracts.get(key);
+      if (existing) {
+        if (!existing.tokenIds.includes(tx.tokenTransfer.tokenId)) {
+          existing.tokenIds.push(tx.tokenTransfer.tokenId);
+        }
+      } else {
+        contracts.set(key, {
+          index: tx.tokenTransfer.contractIndex,
+          subindex: tx.tokenTransfer.contractSubindex,
+          tokenIds: [tx.tokenTransfer.tokenId],
+        });
+      }
+    }
+  }
+
+  return contracts;
+}
+
+async function getContractName(
+  client: SDK.ConcordiumGRPCWebClient,
+  index: number,
+  subindex: number
+): Promise<string | null> {
+  const key = `${index}-${subindex}`;
+  if (contractNameCache.has(key)) return contractNameCache.get(key)!;
+
+  try {
+    const contractAddr = SDK.ContractAddress.create(BigInt(index), BigInt(subindex));
+    const instanceInfo = await client.getInstanceInfo(contractAddr);
+    const initNameStr = SDK.InitName.toString(instanceInfo.name);
+    const name = initNameStr.replace(/^init_/, '');
+    contractNameCache.set(key, name);
+    return name;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Query CIS-2 balanceOf via gRPC invokeContract.
+ */
+async function queryCIS2BalanceOf(
+  client: SDK.ConcordiumGRPCWebClient,
+  contractName: string,
+  contractIndex: number,
+  contractSubindex: number,
+  tokenId: string,
+  accountAddress: SDK.AccountAddress.Type
+): Promise<string | null> {
+  const contractAddr = SDK.ContractAddress.create(
+    BigInt(contractIndex),
+    BigInt(contractSubindex)
+  );
+
+  const param = serializeCIS2BalanceOfParam(tokenId, accountAddress);
+
+  const result = await client.invokeContract({
+    contract: contractAddr,
+    method: SDK.ReceiveName.fromString(`${contractName}.balanceOf`),
+    parameter: SDK.Parameter.fromBuffer(param.buffer as ArrayBuffer),
+  });
+
+  if (result.tag === 'success' && result.returnValue) {
+    return parseCIS2BalanceOfResponse(result.returnValue);
+  }
+
+  return null;
+}
+
+/**
+ * Serialize CIS-2 balanceOf query parameter.
+ * Format: u16_LE(count=1) + u8(token_id_len) + token_id_bytes + u8(0=Account) + 32_bytes(address)
+ */
+function serializeCIS2BalanceOfParam(
+  tokenId: string,
+  accountAddress: SDK.AccountAddress.Type
+): Uint8Array {
+  const parts: Uint8Array[] = [];
+
+  // Number of queries (u16 LE)
+  parts.push(new Uint8Array([1, 0]));
+
+  // Token ID: length (u8) + bytes
+  const tokenIdBytes = hexToBytes(tokenId);
+  parts.push(new Uint8Array([tokenIdBytes.length]));
+  if (tokenIdBytes.length > 0) {
+    parts.push(tokenIdBytes);
+  }
+
+  // Address: tag (0 = Account) + 32 bytes
+  parts.push(new Uint8Array([0]));
+  parts.push(SDK.AccountAddress.toBuffer(accountAddress));
+
+  return concatUint8Arrays(parts);
+}
+
+/**
+ * Parse CIS-2 balanceOf response.
+ * Format: u16_LE(count) + LEB128(amount) per result
+ */
+function parseCIS2BalanceOfResponse(returnValue: SDK.ReturnValue.Type): string | null {
+  try {
+    const hex = SDK.ReturnValue.toHexString(returnValue);
+    const bytes = hexToBytes(hex);
+
+    if (bytes.length < 2) return null;
+
+    // Skip count (u16 LE), read first balance (LEB128)
+    const [balance] = leb128Decode(bytes, 2);
+    return balance.toString();
+  } catch {
+    return null;
+  }
+}
+
+// ==========================================
+// CIS-2 Event Parsing (for transaction history)
+// ==========================================
+
+interface TokenTransferInfo {
+  tokenId: string;
+  amount: string;
+  from: string;
+  to: string;
+  contractIndex: number;
+  contractSubindex: number;
+}
+
+/**
+ * Extract CIS-2 token transfer info from wallet-proxy transaction events.
+ * Returns the first transfer event found, or undefined.
+ */
+export function extractTokenTransferFromEvents(events: unknown[]): TokenTransferInfo | undefined {
+  if (!events || !Array.isArray(events)) return undefined;
+
+  for (const event of events) {
+    if (!event || typeof event !== 'object') continue;
+    const obj = event as Record<string, unknown>;
+
+    // Handle various event formats from wallet-proxy
+    let updated: Record<string, unknown> | undefined;
+
+    // Format: { Updated: { address, events, ... } }
+    if (obj.Updated && typeof obj.Updated === 'object') {
+      updated = obj.Updated as Record<string, unknown>;
+    }
+    // Format: { tag: "Updated", address: {...}, events: [...] }
+    else if (obj.tag === 'Updated') {
+      updated = obj;
+    }
+
+    if (!updated) continue;
+
+    const contractAddr = updated.address as { index: number; subindex: number } | undefined;
+    const innerEvents = updated.events as string[] | undefined;
+
+    if (!contractAddr || !innerEvents || !Array.isArray(innerEvents)) continue;
+
+    for (const hexEvent of innerEvents) {
+      if (typeof hexEvent !== 'string') continue;
+      const parsed = parseCIS2TransferEvent(hexEvent);
+      if (parsed) {
+        return {
+          tokenId: parsed.tokenId,
+          amount: parsed.amount,
+          from: parsed.from,
+          to: parsed.to,
+          contractIndex: contractAddr.index,
+          contractSubindex: contractAddr.subindex,
+        };
+      }
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Parse a hex-encoded CIS-2 Transfer event.
+ * CIS-2 Transfer event tag = 0xFF
+ * Format: 0xFF + tokenId(u8 len + bytes) + amount(LEB128) + from(tag+addr) + to(tag+addr)
+ */
+function parseCIS2TransferEvent(
+  hex: string
+): { tokenId: string; amount: string; from: string; to: string } | null {
+  try {
+    const bytes = hexToBytes(hex);
+    if (bytes.length < 3) return null;
+
+    let offset = 0;
+    const tag = bytes[offset++];
+    if (tag !== 0xff) return null; // Not a Transfer event
+
+    // Token ID
+    const tokenIdLen = bytes[offset++];
+    const tokenId =
+      tokenIdLen > 0 ? bytesToHex(bytes.slice(offset, offset + tokenIdLen)) : '';
+    offset += tokenIdLen;
+
+    // Amount (LEB128)
+    const [amount, nextOffset] = leb128Decode(bytes, offset);
+    offset = nextOffset;
+
+    // From address
+    const fromTag = bytes[offset++];
+    let from = '';
+    if (fromTag === 0 && offset + 32 <= bytes.length) {
+      from = accountBytesToBase58(bytes.slice(offset, offset + 32));
+      offset += 32;
+    } else if (fromTag === 1 && offset + 16 <= bytes.length) {
+      offset += 16; // Skip contract address
+    }
+
+    // To address
+    const toTag = bytes[offset++];
+    let to = '';
+    if (toTag === 0 && offset + 32 <= bytes.length) {
+      to = accountBytesToBase58(bytes.slice(offset, offset + 32));
+      offset += 32;
+    } else if (toTag === 1 && offset + 16 <= bytes.length) {
+      offset += 16;
+    }
+
+    return { tokenId, amount: amount.toString(), from, to };
+  } catch {
+    return null;
+  }
+}
+
+function accountBytesToBase58(bytes: Uint8Array): string {
+  try {
+    const addr = SDK.AccountAddress.fromBuffer(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
+    return SDK.AccountAddress.toBase58(addr);
+  } catch {
+    return bytesToHex(bytes);
+  }
+}
+
+// ==========================================
+// Format / Parse helpers
+// ==========================================
+
 export function formatTokenAmount(amount: string, decimals: number): string {
   if (decimals === 0) return amount;
 
@@ -55,9 +479,6 @@ export function formatTokenAmount(amount: string, decimals: number): string {
   return fracPart ? `${intPart}.${fracPart}` : intPart;
 }
 
-/**
- * Parse a token amount string to raw integer string.
- */
 export function parseTokenAmount(amount: string, decimals: number): string {
   if (decimals === 0) return amount;
 
@@ -69,10 +490,10 @@ export function parseTokenAmount(amount: string, decimals: number): string {
   return raw.toString();
 }
 
-/**
- * Send a CIS-2 token transfer using the updateContract transaction type.
- * CIS-2 `transfer` entrypoint expects a list of transfers serialized per the CIS-2 spec.
- */
+// ==========================================
+// CIS-2 Token Transfer (send)
+// ==========================================
+
 export async function sendTokenTransfer(
   fromAccount: WalletAccount,
   toAddress: string,
@@ -86,11 +507,8 @@ export async function sendTokenTransfer(
   const senderAddress = SDK.AccountAddress.fromBase58(fromAccount.address);
   const receiverAddress = SDK.AccountAddress.fromBase58(toAddress);
 
-  // Get nonce
   const nonceResponse = await client.getNextAccountNonce(senderAddress);
 
-  // Serialize CIS-2 transfer parameter
-  // Format: LEB128(count) + for each: tokenId + amount + from + to(list)
   const transferParam = serializeCIS2Transfer(
     tokenId,
     amount,
@@ -98,10 +516,11 @@ export async function sendTokenTransfer(
     receiverAddress
   );
 
-  // Build the contract name - we need to get it from the contract instance
-  const contractAddr = SDK.ContractAddress.create(BigInt(contractIndex), BigInt(contractSubindex));
+  const contractAddr = SDK.ContractAddress.create(
+    BigInt(contractIndex),
+    BigInt(contractSubindex)
+  );
   const instanceInfo = await client.getInstanceInfo(contractAddr);
-  // InitName is like "init_cis2_multi" - strip "init_" prefix to get contract name
   const initNameStr = SDK.InitName.toString(instanceInfo.name);
   const contractName = initNameStr.replace(/^init_/, '');
   const receiveName = SDK.ReceiveName.fromString(`${contractName}.transfer`);
@@ -129,10 +548,10 @@ export async function sendTokenTransfer(
   return SDK.TransactionHash.toHexString(txHash);
 }
 
-/**
- * Serialize a single CIS-2 transfer according to the CIS-2 specification.
- * See: https://proposals.concordium.software/CIS/cis-2.html#transfer
- */
+// ==========================================
+// Serialization helpers
+// ==========================================
+
 function serializeCIS2Transfer(
   tokenId: string,
   amount: string,
@@ -141,7 +560,7 @@ function serializeCIS2Transfer(
 ): Uint8Array {
   const parts: Uint8Array[] = [];
 
-  // Number of transfers (u16 LE) - 1 transfer
+  // Number of transfers (u16 LE)
   parts.push(new Uint8Array([1, 0]));
 
   // Token ID: length (u8) + bytes
@@ -153,26 +572,17 @@ function serializeCIS2Transfer(
   parts.push(leb128Encode(BigInt(amount)));
 
   // From: tag (0 = Account) + 32 bytes address
-  parts.push(new Uint8Array([0])); // Account tag
+  parts.push(new Uint8Array([0]));
   parts.push(SDK.AccountAddress.toBuffer(from));
 
-  // To: Receiver tag (0 = Account) + 32 bytes address
-  parts.push(new Uint8Array([0])); // Account tag
+  // To: tag (0 = Account) + 32 bytes address
+  parts.push(new Uint8Array([0]));
   parts.push(SDK.AccountAddress.toBuffer(to));
 
   // Additional data for receive hook (empty, length 0)
-  parts.push(new Uint8Array([0, 0])); // u16 LE length = 0
+  parts.push(new Uint8Array([0, 0]));
 
-  // Concatenate all parts
-  const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const part of parts) {
-    result.set(part, offset);
-    offset += part.length;
-  }
-
-  return result;
+  return concatUint8Arrays(parts);
 }
 
 function hexToBytes(hex: string): Uint8Array {
@@ -185,6 +595,12 @@ function hexToBytes(hex: string): Uint8Array {
   return bytes;
 }
 
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
 function leb128Encode(value: bigint): Uint8Array {
   const bytes: number[] = [];
   let v = value;
@@ -195,4 +611,30 @@ function leb128Encode(value: bigint): Uint8Array {
     bytes.push(byte);
   } while (v > 0n);
   return new Uint8Array(bytes);
+}
+
+function leb128Decode(bytes: Uint8Array, startOffset: number): [bigint, number] {
+  let result = 0n;
+  let shift = 0n;
+  let offset = startOffset;
+
+  while (offset < bytes.length) {
+    const byte = bytes[offset++];
+    result |= BigInt(byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) break;
+    shift += 7n;
+  }
+
+  return [result, offset];
+}
+
+function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
+  const totalLength = arrays.reduce((sum, a) => sum + a.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const arr of arrays) {
+    result.set(arr, offset);
+    offset += arr.length;
+  }
+  return result;
 }

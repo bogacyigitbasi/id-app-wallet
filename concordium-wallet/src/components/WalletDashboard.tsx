@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { QRCodeSVG } from 'qrcode.react';
 import { useWallet } from '../contexts/WalletContext';
 import { SendCCD } from './SendCCD';
 import { CreateAccount } from './CreateAccount';
@@ -7,6 +8,7 @@ import { TransactionHistory } from './TransactionHistory';
 import { TokenList } from './TokenList';
 import { DAppConnector } from './DAppConnector';
 import { generateAccountFromSeed } from '../services/concordium';
+import { getCCDPriceUSD } from '../services/priceService';
 import { getSession } from '../services/walletConnect';
 import type { WalletAccount, TokenBalance } from '../types';
 
@@ -27,6 +29,8 @@ export function WalletDashboard({ onLock, onReset }: WalletDashboardProps) {
   const [password, setPassword] = useState('');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [sendToken, setSendToken] = useState<TokenBalance | null>(null);
+  const [showReceiveQR, setShowReceiveQR] = useState(false);
+  const [ccdPriceUSD, setCcdPriceUSD] = useState<number | null>(null);
 
   const activeAccount = state.accounts[state.activeAccountIndex];
 
@@ -37,6 +41,10 @@ export function WalletDashboard({ onLock, onReset }: WalletDashboardProps) {
   }, [state.accounts.length]);
 
   useEffect(() => {
+    getCCDPriceUSD().then(setCcdPriceUSD);
+  }, []);
+
+  useEffect(() => {
     const onFsChange = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener('fullscreenchange', onFsChange);
     return () => document.removeEventListener('fullscreenchange', onFsChange);
@@ -45,11 +53,14 @@ export function WalletDashboard({ onLock, onReset }: WalletDashboardProps) {
   const handleRefresh = async () => {
     setIsRefreshing(true);
     try {
-      await Promise.all([
+      // Fetch transactions + CCD balance + price in parallel
+      const [, txs] = await Promise.all([
         refreshBalances(),
-        refreshTokens(),
         fetchTransactions(),
+        getCCDPriceUSD().then(setCcdPriceUSD),
       ]);
+      // Then refresh token balances (needs transaction data to discover contracts)
+      await refreshTokens(txs);
     } finally {
       setIsRefreshing(false);
     }
@@ -104,17 +115,22 @@ export function WalletDashboard({ onLock, onReset }: WalletDashboardProps) {
     }
   };
 
-  // Sub-views
-  if (view === 'send' && activeAccount) {
-    return (
-      <SendCCD
-        onClose={() => { setView('main'); setSendToken(null); }}
-        onSuccess={handleRefresh}
-        initialToken={sendToken}
-      />
-    );
-  }
+  const getUSDValue = (): string | null => {
+    if (!ccdPriceUSD || !activeAccount?.balance) return null;
+    const ccdAmount = parseFloat(activeAccount.balance.replace(/,/g, ''));
+    if (isNaN(ccdAmount)) return null;
+    const usd = ccdAmount * ccdPriceUSD;
+    return usd.toLocaleString(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
 
+  const getExplorerUrl = () => {
+    const base = state.network === 'Testnet'
+      ? 'https://testnet.ccdscan.io'
+      : 'https://ccdscan.io';
+    return `${base}/?dcount=1&dentity=account&daddress=${activeAccount?.address}`;
+  };
+
+  // Sub-views that replace the entire layout (connect, create)
   if (view === 'connect') {
     return (
       <ConnectIDApp
@@ -133,6 +149,172 @@ export function WalletDashboard({ onLock, onReset }: WalletDashboardProps) {
       />
     );
   }
+
+  // Determine main area content
+  const renderMainContent = () => {
+    // Send view renders inline within the dashboard
+    if (view === 'send' && activeAccount) {
+      return (
+        <SendCCD
+          onClose={() => { setView('main'); setSendToken(null); }}
+          onSuccess={handleRefresh}
+          initialToken={sendToken}
+        />
+      );
+    }
+
+    if (state.accounts.length === 0) {
+      return (
+        <div className="no-accounts">
+          <h2>Welcome!</h2>
+          <p>You don't have any accounts yet. Create your first Concordium account to get started.</p>
+          <button onClick={handleCreateAccount} className="primary-button">
+            Create Account
+          </button>
+        </div>
+      );
+    }
+
+    return (
+      <>
+        {/* Account Selector */}
+        <div className="account-selector">
+          <label>Account</label>
+          <select
+            value={state.activeAccountIndex}
+            onChange={(e) => setActiveAccount(Number(e.target.value))}
+          >
+            {state.accounts.map((acc, idx) => (
+              <option key={acc.address} value={idx}>
+                Account {idx + 1} ({acc.address.slice(0, 8)}...)
+              </option>
+            ))}
+          </select>
+          <button onClick={handleCreateAccount} className="add-account-button">
+            + Add
+          </button>
+        </div>
+
+        {/* Tab Navigation */}
+        <nav className="tab-nav">
+          {([
+            { id: 'overview', label: 'Overview' },
+            { id: 'tokens', label: 'Tokens' },
+            { id: 'history', label: 'History' },
+            { id: 'dapps', label: 'dApps' },
+          ] as { id: Tab; label: string }[]).map((tab) => (
+            <button
+              key={tab.id}
+              className={`tab-button ${activeTab === tab.id ? 'active' : ''}`}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+
+        {/* Tab Content */}
+        <div className="tab-content">
+          {activeTab === 'overview' && activeAccount && (
+            <div className="overview-tab">
+              <div className="account-card">
+                <div className="card-top-row">
+                  <a
+                    href={getExplorerUrl()}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="explorer-chip"
+                  >
+                    View on Explorer &#8599;
+                  </a>
+                </div>
+
+                <div className="balance-section">
+                  <span className="balance-label">Balance</span>
+                  <span className="balance-value">
+                    {activeAccount.balance ?? '...'} CCD
+                  </span>
+                  {getUSDValue() && (
+                    <span className="balance-usd">{getUSDValue()}</span>
+                  )}
+                  <button
+                    onClick={handleRefresh}
+                    disabled={isRefreshing}
+                    className="refresh-button"
+                  >
+                    {isRefreshing ? 'Refreshing...' : 'Refresh'}
+                  </button>
+                </div>
+
+                <div className="address-section">
+                  <label>Address</label>
+                  <div className="address-display">
+                    <code>{activeAccount.address}</code>
+                    <button
+                      onClick={() => copyToClipboard(activeAccount.address)}
+                      className="copy-button"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
+
+                <div className="action-buttons">
+                  <button onClick={() => setView('send')} className="primary-button">
+                    Send
+                  </button>
+                  <button
+                    onClick={() => setShowReceiveQR(true)}
+                    className="secondary-button"
+                  >
+                    Receive
+                  </button>
+                </div>
+              </div>
+
+              {/* Quick token overview */}
+              <TokenList onSendToken={handleSendToken} />
+
+              {/* Account Details */}
+              <div className="account-details">
+                <h3>Account Details</h3>
+                <div className="detail-item">
+                  <label>Public Key</label>
+                  <code>{activeAccount.publicKey.slice(0, 30)}...</code>
+                  <button
+                    onClick={() => copyToClipboard(activeAccount.publicKey)}
+                    className="copy-button"
+                  >
+                    Copy
+                  </button>
+                </div>
+                <div className="detail-item">
+                  <label>Account Index</label>
+                  <span>{activeAccount.accountIndex}</span>
+                </div>
+                <div className="detail-item">
+                  <label>Network</label>
+                  <span>{activeAccount.network}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'tokens' && (
+            <TokenList onSendToken={handleSendToken} />
+          )}
+
+          {activeTab === 'history' && (
+            <TransactionHistory onClose={() => setActiveTab('overview')} />
+          )}
+
+          {activeTab === 'dapps' && (
+            <DAppConnector onClose={() => setActiveTab('overview')} />
+          )}
+        </div>
+      </>
+    );
+  };
 
   return (
     <div className={`wallet-dashboard ${isFullscreen ? 'fullscreen' : ''}`}>
@@ -176,148 +358,36 @@ export function WalletDashboard({ onLock, onReset }: WalletDashboardProps) {
       )}
 
       <main className="dashboard-main">
-        {state.accounts.length === 0 ? (
-          <div className="no-accounts">
-            <h2>Welcome!</h2>
-            <p>You don't have any accounts yet. Create your first Concordium account to get started.</p>
-            <button onClick={handleCreateAccount} className="primary-button">
-              Create Account
+        {renderMainContent()}
+      </main>
+
+      {/* Receive QR Modal */}
+      {showReceiveQR && activeAccount && (
+        <div className="receive-overlay" onClick={() => setShowReceiveQR(false)}>
+          <div className="receive-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>Receive CCD</h2>
+              <button onClick={() => setShowReceiveQR(false)} className="close-button">&times;</button>
+            </div>
+            <p className="receive-hint">Scan this QR code with a Concordium wallet to send funds to your address.</p>
+            <div className="receive-qr">
+              <QRCodeSVG value={activeAccount.address} size={200} />
+            </div>
+            <div className="receive-address">
+              <code>{activeAccount.address}</code>
+            </div>
+            <button
+              onClick={() => copyToClipboard(activeAccount.address)}
+              className="primary-button receive-copy"
+            >
+              Copy Address
+            </button>
+            <button onClick={() => setShowReceiveQR(false)} className="secondary-button receive-done">
+              Done
             </button>
           </div>
-        ) : (
-          <>
-            {/* Account Selector */}
-            <div className="account-selector">
-              <label>Account</label>
-              <select
-                value={state.activeAccountIndex}
-                onChange={(e) => setActiveAccount(Number(e.target.value))}
-              >
-                {state.accounts.map((acc, idx) => (
-                  <option key={acc.address} value={idx}>
-                    Account {idx + 1} ({acc.address.slice(0, 8)}...)
-                  </option>
-                ))}
-              </select>
-              <button onClick={handleCreateAccount} className="add-account-button">
-                + Add Account
-              </button>
-            </div>
-
-            {/* Tab Navigation */}
-            <nav className="tab-nav">
-              {([
-                { id: 'overview', label: 'Overview' },
-                { id: 'tokens', label: 'Tokens' },
-                { id: 'history', label: 'History' },
-                { id: 'dapps', label: 'dApps' },
-              ] as { id: Tab; label: string }[]).map((tab) => (
-                <button
-                  key={tab.id}
-                  className={`tab-button ${activeTab === tab.id ? 'active' : ''}`}
-                  onClick={() => setActiveTab(tab.id)}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </nav>
-
-            {/* Tab Content */}
-            <div className="tab-content">
-              {activeTab === 'overview' && activeAccount && (
-                <div className="overview-tab">
-                  <div className="account-card">
-                    <div className="balance-section">
-                      <span className="balance-label">Balance</span>
-                      <span className="balance-value">
-                        {activeAccount.balance ?? '...'} CCD
-                      </span>
-                      <button
-                        onClick={handleRefresh}
-                        disabled={isRefreshing}
-                        className="refresh-button"
-                      >
-                        {isRefreshing ? 'Refreshing...' : 'Refresh'}
-                      </button>
-                    </div>
-
-                    <div className="address-section">
-                      <label>Address</label>
-                      <div className="address-display">
-                        <code>{activeAccount.address}</code>
-                        <button
-                          onClick={() => copyToClipboard(activeAccount.address)}
-                          className="copy-button"
-                        >
-                          Copy
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="action-buttons">
-                      <button onClick={() => setView('send')} className="primary-button">
-                        Send
-                      </button>
-                      <button
-                        onClick={() => copyToClipboard(activeAccount.address)}
-                        className="secondary-button"
-                      >
-                        Receive
-                      </button>
-                      <a
-                        href={`https://testnet.ccdscan.io/accounts/${activeAccount.address}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="secondary-button"
-                      >
-                        Explorer
-                      </a>
-                    </div>
-                  </div>
-
-                  {/* Quick token overview */}
-                  <TokenList onSendToken={handleSendToken} />
-
-                  {/* Account Details */}
-                  <div className="account-details">
-                    <h3>Account Details</h3>
-                    <div className="detail-item">
-                      <label>Public Key</label>
-                      <code>{activeAccount.publicKey.slice(0, 30)}...</code>
-                      <button
-                        onClick={() => copyToClipboard(activeAccount.publicKey)}
-                        className="copy-button"
-                      >
-                        Copy
-                      </button>
-                    </div>
-                    <div className="detail-item">
-                      <label>Account Index</label>
-                      <span>{activeAccount.accountIndex}</span>
-                    </div>
-                    <div className="detail-item">
-                      <label>Network</label>
-                      <span>{activeAccount.network}</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {activeTab === 'tokens' && (
-                <TokenList onSendToken={handleSendToken} />
-              )}
-
-              {activeTab === 'history' && (
-                <TransactionHistory onClose={() => setActiveTab('overview')} />
-              )}
-
-              {activeTab === 'dapps' && (
-                <DAppConnector onClose={() => setActiveTab('overview')} />
-              )}
-            </div>
-          </>
-        )}
-      </main>
+        </div>
+      )}
 
       <footer className="dashboard-footer">
         <p>Concordium Web Wallet - {state.network}</p>
