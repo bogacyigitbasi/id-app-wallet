@@ -808,42 +808,67 @@ textarea {
 
 .qr-section {
   margin: 1.5rem 0;
-}
-
-.auth-code-display {
-  text-align: center;
-  margin-bottom: 0.75rem;
-}
-
-.auth-code-display p {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-  margin-bottom: 0.4rem;
-}
-
-.auth-code {
-  display: inline-flex;
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  width: 72px;
-  height: 72px;
-  border-radius: 50%;
-  border: 2px solid #1143A7;
-  background: linear-gradient(180deg, #fff 0%, #eee 100%);
-  font-family: monospace;
-  font-size: 18px;
-  font-weight: 700;
-  color: #0047ab;
-  letter-spacing: 2px;
+  gap: 1rem;
+}
+
+.qr-instruction {
+  font-size: 0.95rem;
+  color: var(--text-color);
+  margin-bottom: 0.5rem;
+}
+
+.qr-code-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 1.5rem;
+  background: var(--secondary-color);
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
 }
 
 .qr-code {
   background: white;
-  padding: 0.75rem;
+  padding: 1rem;
   border-radius: 10px;
-  display: inline-block;
-  margin: 1rem 0;
-  border: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.auth-code-display {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.auth-code-display p {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.auth-code {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  border: 3px solid var(--accent-color);
+  background: white;
+  font-family: 'Courier New', monospace;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--accent-color);
+  letter-spacing: 1px;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.2);
 }
 
 .idapp-download {

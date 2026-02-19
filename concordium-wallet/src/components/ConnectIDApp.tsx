@@ -107,23 +107,25 @@ export function ConnectIDApp({ network, onConnected, publicKey }: ConnectIDAppPr
 
       {status === 'waiting' && wcUri && (
         <div className="qr-section">
-          <p>Scan this QR code with the Concordium ID App, or click the button below if on mobile:</p>
+          <p className="qr-instruction">Scan this QR code with the Concordium ID App:</p>
 
-          <div className="auth-code-display">
-            <p>Match this code in the ID App</p>
-            <div className="auth-code">{authCode}</div>
+          <div className="qr-code-container">
+            <div className="qr-code">
+              <QRCodeSVG value={wcUri} size={256} />
+            </div>
+
+            <div className="auth-code-display">
+              <p>Verify this code in the ID App:</p>
+              <div className="auth-code">{authCode}</div>
+            </div>
           </div>
 
-          <div className="qr-code">
-            <QRCodeSVG value={wcUri} size={256} />
-          </div>
-
-          <a href={deepLink} className="primary-button">
-            Open ID App
+          <a href={deepLink} className="primary-button" style={{ marginTop: '1rem' }}>
+            Open ID App on Mobile
           </a>
 
           <p className="hint">
-            Waiting for connection from ID App...
+            Waiting for ID App connection...
           </p>
         </div>
       )}
