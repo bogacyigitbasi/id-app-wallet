@@ -106,9 +106,12 @@ export function TokenList({ onSendToken }: TokenListProps) {
                 </span>
               </div>
               <div className="token-info">
-                <span className="token-name">
-                  {token.metadata?.name || `Token ${token.tokenId}`}
-                </span>
+                <div className="token-name-row">
+                  <span className="token-name">
+                    {token.metadata?.name || `Token ${token.tokenId}`}
+                  </span>
+                  {token.isPLT && <span className="plt-badge">PLT</span>}
+                </div>
                 <span className="token-symbol">
                   {token.metadata?.symbol || `Contract ${token.contractIndex}`}
                 </span>

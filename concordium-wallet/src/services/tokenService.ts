@@ -24,6 +24,7 @@ export async function getTokenBalances(
   transactions?: Transaction[]
 ): Promise<TokenBalance[]> {
   const contracts = new Map<string, ContractInfo>();
+  const pltContracts = new Set<string>(); // Track PLT contracts
 
   // Source 1: wallet-proxy v2 accBalance tokens
   try {
@@ -56,6 +57,7 @@ export async function getTokenBalances(
     const pltTokens = await getPLTTokens(network);
     for (const plt of pltTokens) {
       const key = `${plt.contractIndex}-${plt.contractSubindex}`;
+      pltContracts.add(key); // Mark as PLT
       if (!contracts.has(key)) {
         contracts.set(key, {
           index: plt.contractIndex,
@@ -128,6 +130,8 @@ export async function getTokenBalances(
       const contractName = await getContractName(client, info.index, info.subindex);
       if (!contractName) continue;
 
+      const isPLT = pltContracts.has(key); // Check if this is a PLT contract
+
       // Try to get token metadata from wallet-proxy CIS2Tokens endpoint
       let tokenInfos: CIS2TokenInfo[] = [];
       try {
@@ -191,6 +195,7 @@ export async function getTokenBalances(
               contractSubindex: info.subindex,
               balance,
               metadata,
+              isPLT, // Mark PLT tokens
             });
           }
         } catch (err) {

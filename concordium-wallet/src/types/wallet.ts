@@ -48,6 +48,7 @@ export interface TokenBalance {
   contractSubindex: number;
   balance: string;
   metadata?: TokenMetadata;
+  isPLT?: boolean; // True if token is a Protocol-Level Token
 }
 
 export interface TokenMetadata {

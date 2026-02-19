@@ -56,9 +56,15 @@ export function TransactionHistory({ onClose }: TransactionHistoryProps) {
   };
 
   const getTypeLabel = (tx: Transaction) => {
-    // If it's a token transfer, label it as such
+    // If it's a token transfer, check if it's PLT
     if (tx.tokenTransfer) {
-      return 'Token Transfer';
+      const tokens = activeAccount
+        ? state.tokenBalances[activeAccount.address] || []
+        : [];
+      const match = tokens.find(
+        (t) => t.contractIndex === tx.tokenTransfer!.contractIndex && t.tokenId === tx.tokenTransfer!.tokenId
+      );
+      return match?.isPLT ? 'PLT Transfer' : 'Token Transfer';
     }
     switch (tx.type) {
       case 'transfer': return 'Transfer';
